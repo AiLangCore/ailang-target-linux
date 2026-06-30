@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo 'target-linux doctor: scaffold installed'
+exit 0

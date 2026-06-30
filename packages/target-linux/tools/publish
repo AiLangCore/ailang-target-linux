@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo 'Err#err1(code=TARGET001 message="target-linux publish is not implemented yet." nodeId=target-linux)' >&2
+exit 2

@@ -1,0 +1,20 @@
+schema = "ailang.package-source.v1"
+name = "target-linux"
+version = "0.0.1-alpha.1"
+types = ["target", "tool", "template"]
+
+[targets.linux]
+id = "linux"
+description = "Linux executable and package target"
+runtime = "aivm"
+profile = "linux-posix"
+aliases = ["gnu-linux"]
+defaultRunner = "run"
+artifactTypes = ["dir", "tar.gz", "appimage", "deb", "rpm"]
+options = ["arch", "desktop", "service", "package-format"]
+
+[targets.linux.tools]
+run = []
+publish = []
+doctor = []
+flash = []
