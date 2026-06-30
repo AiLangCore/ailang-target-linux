@@ -24,6 +24,9 @@ qemu_cpu="${AILANG_LINUX_QEMU_CPU:-host}"
 qemu_serial_log="${AILANG_LINUX_QEMU_SERIAL_LOG:-}"
 qemu_extra_args=""
 guest_display="${AILANG_LINUX_QEMU_GUEST_DISPLAY:-:0}"
+run_tool=""
+app_aibc1=""
+aivectra_runtime=""
 
 host_default_arch() {
   case "$(uname -m 2>/dev/null || true)" in
@@ -31,6 +34,44 @@ host_default_arch() {
     x86_64|amd64) printf '%s\n' "x86_64" ;;
     *) uname -m ;;
   esac
+}
+
+project_manifest_path() {
+  if [ -d "$program" ] && [ -f "$program/project.aiproj" ]; then
+    printf '%s\n' "$program/project.aiproj"
+    return 0
+  fi
+  if [ -f "$program" ] && [ "$(basename "$program")" = "project.aiproj" ]; then
+    printf '%s\n' "$program"
+    return 0
+  fi
+  return 1
+}
+
+project_dir_path() {
+  manifest="$(project_manifest_path)" || return 1
+  dirname "$manifest"
+}
+
+project_run_tool() {
+  manifest="$(project_manifest_path)" || return 1
+  sed -n 's/.*runTool="\([^"]*\)".*/\1/p' "$manifest" | head -n 1
+}
+
+resolve_aivectra_runtime() {
+  for candidate in \
+    "${AILANG_LINUX_AIVECTRA_BIN:-}" \
+    "${AILANG_SDK_ROOT:-}/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/local/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/current/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/toolchains/0.0.1-beta.22/runtimes/linux-arm64/aivectra"
+  do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 append_app_arg() {
@@ -103,6 +144,8 @@ esac
 
 AILANG_BIN="${AILANG_BIN:-ailang}"
 export AILANG_DISABLE_PACKAGE_TARGET_DISPATCH=1
+
+run_tool="$(project_run_tool || true)"
 
 if [ "$runner" != "qemu" ]; then
   if [ "$(uname -s)" != "Linux" ]; then
@@ -186,11 +229,27 @@ if [ ! -f "$qemu_efi_vars" ]; then
   cp "$qemu_efi_vars_template" "$qemu_efi_vars"
 fi
 
-"$AILANG_BIN" publish "$program" --target "$rid" --out "$out" >/dev/null
-app_name="$(basename "$(find "$out" -maxdepth 1 -type f -perm -111 ! -name app.aibc1 | head -n 1)")"
-if [ -z "$app_name" ]; then
-  echo 'Err#err1(code=TARGET001 message="target-linux QEMU publish did not produce an executable." nodeId=target-linux)' >&2
-  exit 2
+if [ "$run_tool" = "aivectra" ]; then
+  project_dir="$(project_dir_path)"
+  "$AILANG_BIN" build "$project_dir" >/dev/null
+  app_aibc1="$project_dir/app.aibc1"
+  if [ ! -f "$app_aibc1" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra build did not produce app.aibc1." nodeId=target-linux)' >&2
+    exit 2
+  fi
+  aivectra_runtime="$(resolve_aivectra_runtime || true)"
+  if [ -z "$aivectra_runtime" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra run requires a Linux ARM64 aivectra runtime in the SDK." nodeId=target-linux)' >&2
+    exit 2
+  fi
+  app_name="aivectra"
+else
+  "$AILANG_BIN" publish "$program" --target "$rid" --out "$out" >/dev/null
+  app_name="$(basename "$(find "$out" -maxdepth 1 -type f -perm -111 ! -name app.aibc1 | head -n 1)")"
+  if [ -z "$app_name" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux QEMU publish did not produce an executable." nodeId=target-linux)' >&2
+    exit 2
+  fi
 fi
 
 ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -p $qemu_ssh_port"
@@ -307,5 +366,11 @@ fi
 
 remote_dir="/tmp/ailang-target-linux-$app_name"
 ssh $ssh_opts "$qemu_user@127.0.0.1" "rm -rf '$remote_dir' && mkdir -p '$remote_dir'"
-scp $scp_opts -r "$out/." "$qemu_user@127.0.0.1:$remote_dir/" >/dev/null
-ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/$app_name' && DISPLAY='$guest_display' '$remote_dir/$app_name'"
+if [ "$run_tool" = "aivectra" ]; then
+  scp $scp_opts "$app_aibc1" "$qemu_user@127.0.0.1:$remote_dir/app.aibc1" >/dev/null
+  scp $scp_opts "$aivectra_runtime" "$qemu_user@127.0.0.1:$remote_dir/aivectra" >/dev/null
+  ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/aivectra' && DISPLAY='$guest_display' '$remote_dir/aivectra' '$remote_dir/app.aibc1'"
+else
+  scp $scp_opts -r "$out/." "$qemu_user@127.0.0.1:$remote_dir/" >/dev/null
+  ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/$app_name' && DISPLAY='$guest_display' '$remote_dir/$app_name'"
+fi
