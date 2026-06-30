@@ -3,49 +3,238 @@ set -eu
 
 program="${2:-.}"
 arch=""
+runner="host"
 app_args=""
 after_dash=0
+out="dist-linux-qemu"
+qemu_image="${AILANG_LINUX_QEMU_IMAGE:-}"
+qemu_efi_code="${AILANG_LINUX_QEMU_EFI_CODE:-}"
+qemu_efi_vars="${AILANG_LINUX_QEMU_EFI_VARS:-}"
+qemu_efi_vars_template="${AILANG_LINUX_QEMU_EFI_VARS_TEMPLATE:-}"
+qemu_user="${AILANG_LINUX_QEMU_USER:-ailang}"
+qemu_ssh_port="${AILANG_LINUX_QEMU_SSH_PORT:-2222}"
+qemu_ssh_key="${AILANG_LINUX_QEMU_SSH_KEY:-}"
+qemu_display="${AILANG_LINUX_QEMU_DISPLAY:-cocoa}"
+qemu_memory="${AILANG_LINUX_QEMU_MEMORY:-4096}"
+qemu_smp="${AILANG_LINUX_QEMU_SMP:-4}"
+qemu_accel="${AILANG_LINUX_QEMU_ACCEL:-hvf}"
+qemu_cpu="${AILANG_LINUX_QEMU_CPU:-host}"
+qemu_extra_args=""
+guest_display="${AILANG_LINUX_QEMU_GUEST_DISPLAY:-:0}"
+
+host_default_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    arm64|aarch64) printf '%s\n' "aarch64" ;;
+    x86_64|amd64) printf '%s\n' "x86_64" ;;
+    *) uname -m ;;
+  esac
+}
+
+append_app_arg() {
+  app_args="${app_args}${app_args:+
+}$1"
+}
+
+apply_target_option() {
+  value="$1"
+  name="${value%%=*}"
+  option_value="${value#*=}"
+  if [ "$name" = "$value" ]; then
+    echo "Err#err1(code=TARGET001 message=\"Invalid Linux target option. Expected name=value: $value\" nodeId=target-linux)" >&2
+    exit 2
+  fi
+  case "$name" in
+    arch) arch="$option_value" ;;
+    runner) runner="$option_value" ;;
+    qemu-image) qemu_image="$option_value" ;;
+    qemu-efi-code) qemu_efi_code="$option_value" ;;
+    qemu-efi-vars) qemu_efi_vars="$option_value" ;;
+    qemu-efi-vars-template) qemu_efi_vars_template="$option_value" ;;
+    qemu-user) qemu_user="$option_value" ;;
+    qemu-ssh-port) qemu_ssh_port="$option_value" ;;
+    qemu-ssh-key) qemu_ssh_key="$option_value" ;;
+    qemu-display) qemu_display="$option_value" ;;
+    qemu-memory) qemu_memory="$option_value" ;;
+    qemu-smp) qemu_smp="$option_value" ;;
+    qemu-accel) qemu_accel="$option_value" ;;
+    qemu-cpu) qemu_cpu="$option_value" ;;
+    qemu-guest-display) guest_display="$option_value" ;;
+    *)
+      echo "Err#err1(code=TARGET001 message=\"Unsupported Linux target option: $name\" nodeId=target-linux)" >&2
+      exit 2
+      ;;
+  esac
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --) after_dash=1; shift; continue ;;
   esac
   if [ "$after_dash" -eq 1 ]; then
-    app_args="${app_args}${app_args:+
+    qemu_extra_args="${qemu_extra_args}${qemu_extra_args:+
 }$1"
     shift
     continue
   fi
   case "$1" in
+    --out) out="${2:-dist-linux-qemu}"; shift 2 ;;
     --target-option)
-      value="${2:-}"
-      case "$value" in arch=*) arch="${value#arch=}" ;; esac
+      apply_target_option "${2:-}"
       shift 2
       ;;
-    --target-option=arch=*)
-      arch="${1#--target-option=arch=}"
+    --target-option=*)
+      apply_target_option "${1#--target-option=}"
       shift
       ;;
     *) shift ;;
   esac
 done
 
-case "${arch:-$(uname -m)}" in
-  arm64|aarch64) rid="linux-arm64" ;;
-  x64|x86_64|amd64) rid="linux-x64" ;;
+case "${arch:-$(host_default_arch)}" in
+  arm64|aarch64) arch="aarch64"; rid="linux-arm64" ;;
+  x64|x86_64|amd64) arch="x86_64"; rid="linux-x64" ;;
   *) echo 'Err#err1(code=TARGET001 message="Unsupported Linux target arch." nodeId=target-linux)' >&2; exit 2 ;;
 esac
 
-if [ "$(uname -s)" != "Linux" ]; then
-  echo 'Err#err1(code=TARGET001 message="target-linux run requires a Linux host; use publish for cross-target output." nodeId=target-linux)' >&2
+AILANG_BIN="${AILANG_BIN:-ailang}"
+export AILANG_DISABLE_PACKAGE_TARGET_DISPATCH=1
+
+if [ "$runner" != "qemu" ]; then
+  if [ "$(uname -s)" != "Linux" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux run requires a Linux host; use --target-option runner=qemu for a prepared Linux QEMU guest, or use publish for cross-target output." nodeId=target-linux)' >&2
+    exit 2
+  fi
+  export AILANG_DISABLE_RUN_TOOL_DISPATCH=1
+  if [ -n "$app_args" ]; then
+    # shellcheck disable=SC2086
+    exec "$AILANG_BIN" run "$program" --target "$rid" -- $app_args
+  fi
+  exec "$AILANG_BIN" run "$program" --target "$rid"
+fi
+
+if [ "$arch" != "aarch64" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux QEMU runner currently supports aarch64 guests only." nodeId=target-linux)' >&2
+  exit 2
+fi
+if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
+  echo 'Err#err1(code=TARGET001 message="qemu-system-aarch64 is required for target-linux runner=qemu." nodeId=target-linux)' >&2
+  exit 2
+fi
+if ! command -v ssh >/dev/null 2>&1 || ! command -v scp >/dev/null 2>&1; then
+  echo 'Err#err1(code=TARGET001 message="ssh and scp are required for target-linux runner=qemu." nodeId=target-linux)' >&2
+  exit 2
+fi
+if [ -z "$qemu_image" ] || [ ! -f "$qemu_image" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux runner=qemu requires --target-option qemu-image=<linux-arm64.qcow2> or AILANG_LINUX_QEMU_IMAGE." nodeId=target-linux)' >&2
+  exit 2
+fi
+if [ -z "$qemu_efi_code" ]; then
+  for candidate in \
+    /opt/homebrew/share/qemu/edk2-aarch64-code.fd \
+    /usr/local/share/qemu/edk2-aarch64-code.fd
+  do
+    if [ -f "$candidate" ]; then
+      qemu_efi_code="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$qemu_efi_code" ] || [ ! -f "$qemu_efi_code" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux runner=qemu requires an ARM64 EFI code file. Set --target-option qemu-efi-code=<path>." nodeId=target-linux)' >&2
+  exit 2
+fi
+if [ -z "$qemu_efi_vars_template" ]; then
+  for candidate in \
+    /opt/homebrew/share/qemu/edk2-arm-vars.fd \
+    /usr/local/share/qemu/edk2-arm-vars.fd
+  do
+    if [ -f "$candidate" ]; then
+      qemu_efi_vars_template="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$qemu_efi_vars" ]; then
+  qemu_state_dir="${AILANG_LINUX_QEMU_STATE_DIR:-$PWD/.ailang/qemu-linux}"
+  mkdir -p "$qemu_state_dir"
+  qemu_efi_vars="$qemu_state_dir/efi-vars.fd"
+fi
+if [ ! -f "$qemu_efi_vars" ]; then
+  if [ -z "$qemu_efi_vars_template" ] || [ ! -f "$qemu_efi_vars_template" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux runner=qemu requires EFI vars or an EFI vars template." nodeId=target-linux)' >&2
+    exit 2
+  fi
+  cp "$qemu_efi_vars_template" "$qemu_efi_vars"
+fi
+
+"$AILANG_BIN" publish "$program" --target "$rid" --out "$out" >/dev/null
+app_name="$(basename "$(find "$out" -maxdepth 1 -type f -perm -111 ! -name app.aibc1 | head -n 1)")"
+if [ -z "$app_name" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux QEMU publish did not produce an executable." nodeId=target-linux)' >&2
   exit 2
 fi
 
-AILANG_BIN="${AILANG_BIN:-ailang}"
-export AILANG_DISABLE_PACKAGE_TARGET_DISPATCH=1
-export AILANG_DISABLE_RUN_TOOL_DISPATCH=1
-if [ -n "$app_args" ]; then
-  # shellcheck disable=SC2086
-  exec "$AILANG_BIN" run "$program" --target "$rid" -- $app_args
+ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=3 -p $qemu_ssh_port"
+if [ -n "$qemu_ssh_key" ]; then
+  ssh_opts="$ssh_opts -i $qemu_ssh_key"
 fi
-exec "$AILANG_BIN" run "$program" --target "$rid"
+
+if ! ssh $ssh_opts "$qemu_user@127.0.0.1" true >/dev/null 2>&1; then
+  echo "target-linux qemu: starting aarch64 guest on ssh port $qemu_ssh_port" >&2
+  qemu_args_file="${qemu_state_dir:-$PWD/.ailang/qemu-linux}/qemu.args"
+  mkdir -p "$(dirname "$qemu_args_file")"
+  {
+    printf '%s\n' qemu-system-aarch64
+    printf '%s\n' -machine "virt,accel=$qemu_accel"
+    printf '%s\n' -cpu "$qemu_cpu"
+    printf '%s\n' -smp "$qemu_smp"
+    printf '%s\n' -m "$qemu_memory"
+    printf '%s\n' -display "$qemu_display"
+    printf '%s\n' -device virtio-gpu-pci
+    printf '%s\n' -device virtio-rng-pci
+    printf '%s\n' -device qemu-xhci
+    printf '%s\n' -device usb-kbd
+    printf '%s\n' -device usb-tablet
+    printf '%s\n' -drive "if=pflash,format=raw,readonly=on,file=$qemu_efi_code"
+    printf '%s\n' -drive "if=pflash,format=raw,file=$qemu_efi_vars"
+    printf '%s\n' -drive "if=virtio,format=qcow2,file=$qemu_image"
+    printf '%s\n' -netdev "user,id=net0,hostfwd=tcp::$qemu_ssh_port-:22"
+    printf '%s\n' -device virtio-net-pci,netdev=net0
+  } > "$qemu_args_file"
+  # shellcheck disable=SC2086
+  qemu-system-aarch64 \
+    -machine "virt,accel=$qemu_accel" \
+    -cpu "$qemu_cpu" \
+    -smp "$qemu_smp" \
+    -m "$qemu_memory" \
+    -daemonize \
+    -display "$qemu_display" \
+    -device virtio-gpu-pci \
+    -device virtio-rng-pci \
+    -device qemu-xhci \
+    -device usb-kbd \
+    -device usb-tablet \
+    -drive "if=pflash,format=raw,readonly=on,file=$qemu_efi_code" \
+    -drive "if=pflash,format=raw,file=$qemu_efi_vars" \
+    -drive "if=virtio,format=qcow2,file=$qemu_image" \
+    -netdev "user,id=net0,hostfwd=tcp::$qemu_ssh_port-:22" \
+    -device virtio-net-pci,netdev=net0
+fi
+
+ready=0
+for _ in $(seq 1 60); do
+  if ssh $ssh_opts "$qemu_user@127.0.0.1" true >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" != "1" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux QEMU guest did not become reachable over SSH." nodeId=target-linux)' >&2
+  exit 2
+fi
+
+remote_dir="/tmp/ailang-target-linux-$app_name"
+ssh $ssh_opts "$qemu_user@127.0.0.1" "rm -rf '$remote_dir' && mkdir -p '$remote_dir'"
+scp $ssh_opts -r "$out/." "$qemu_user@127.0.0.1:$remote_dir/" >/dev/null
+ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/$app_name' && DISPLAY='$guest_display' '$remote_dir/$app_name'"
