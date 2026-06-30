@@ -1,0 +1,245 @@
+#!/bin/sh
+set -eu
+
+arch=""
+out_dir=""
+image_size="${AILANG_LINUX_QEMU_IMAGE_SIZE:-40G}"
+base_url="${AILANG_LINUX_QEMU_BASE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img}"
+base_sha256="${AILANG_LINUX_QEMU_BASE_SHA256:-}"
+force=0
+
+host_default_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    arm64|aarch64) printf '%s\n' "aarch64" ;;
+    x86_64|amd64) printf '%s\n' "x86_64" ;;
+    *) uname -m ;;
+  esac
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --arch)
+      arch="${2:-}"
+      shift 2
+      ;;
+    --arch=*)
+      arch="${1#--arch=}"
+      shift
+      ;;
+    --out)
+      out_dir="${2:-}"
+      shift 2
+      ;;
+    --out=*)
+      out_dir="${1#--out=}"
+      shift
+      ;;
+    --base-url)
+      base_url="${2:-}"
+      shift 2
+      ;;
+    --base-url=*)
+      base_url="${1#--base-url=}"
+      shift
+      ;;
+    --base-sha256)
+      base_sha256="${2:-}"
+      shift 2
+      ;;
+    --base-sha256=*)
+      base_sha256="${1#--base-sha256=}"
+      shift
+      ;;
+    --image-size)
+      image_size="${2:-}"
+      shift 2
+      ;;
+    --image-size=*)
+      image_size="${1#--image-size=}"
+      shift
+      ;;
+    --force)
+      force=1
+      shift
+      ;;
+    *)
+      echo "Err#err1(code=TARGET001 message=\"Unsupported prepare-qemu option: $1\" nodeId=target-linux)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "${arch:-$(host_default_arch)}" in
+  arm64|aarch64) arch="aarch64" ;;
+  *) echo 'Err#err1(code=TARGET001 message="target-linux prepare-qemu currently supports aarch64 guests only." nodeId=target-linux)' >&2; exit 2 ;;
+esac
+
+if ! command -v qemu-img >/dev/null 2>&1; then
+  echo 'Err#err1(code=TARGET001 message="qemu-img is required to prepare the Linux QEMU guest." nodeId=target-linux)' >&2
+  exit 2
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo 'Err#err1(code=TARGET001 message="curl is required to download the Linux QEMU base image." nodeId=target-linux)' >&2
+  exit 2
+fi
+
+if [ -z "$out_dir" ]; then
+  out_dir="${AILANG_LINUX_QEMU_CACHE_DIR:-${HOME:-.}/.ailang/cache/target-linux/qemu/$arch/ubuntu-noble}"
+fi
+mkdir -p "$out_dir"
+out_dir="$(CDPATH= cd -- "$out_dir" && pwd)"
+
+base_img="$out_dir/base.img"
+guest_img="$out_dir/linux-arm64.qcow2"
+seed_dir="$out_dir/seed"
+seed_iso="$out_dir/seed.iso"
+manifest="$out_dir/manifest.toml"
+ssh_key="$out_dir/ailang_qemu_ed25519"
+ssh_pub=""
+
+if [ "$force" = "1" ]; then
+  rm -f "$base_img" "$guest_img" "$seed_iso" "$manifest"
+  rm -rf "$seed_dir"
+fi
+
+if [ ! -f "$base_img" ]; then
+  tmp_base="$base_img.partial"
+  echo "target-linux prepare-qemu: downloading $base_url" >&2
+  curl -fL --retry 3 --connect-timeout 20 -o "$tmp_base" "$base_url"
+  mv "$tmp_base" "$base_img"
+fi
+
+if [ -n "$base_sha256" ] && command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$base_img" | awk '{print $1}')"
+  if [ "$actual" != "$base_sha256" ]; then
+    echo 'Err#err1(code=TARGET001 message="Downloaded Linux QEMU base image checksum mismatch." nodeId=target-linux)' >&2
+    exit 2
+  fi
+fi
+
+if [ ! -f "$guest_img" ]; then
+  qemu-img create -f qcow2 -F qcow2 -b "$base_img" "$guest_img" "$image_size" >/dev/null
+fi
+
+if [ ! -f "$ssh_key" ]; then
+  if ! command -v ssh-keygen >/dev/null 2>&1; then
+    echo 'Err#err1(code=TARGET001 message="ssh-keygen is required to create the Linux QEMU guest key." nodeId=target-linux)' >&2
+    exit 2
+  fi
+  ssh-keygen -q -t ed25519 -N "" -C "ailang-target-linux-qemu" -f "$ssh_key"
+fi
+ssh_pub="$(cat "$ssh_key.pub")"
+
+mkdir -p "$seed_dir"
+cat > "$seed_dir/meta-data" <<'EOF'
+instance-id: ailang-target-linux-qemu
+local-hostname: ailang-linux-qemu
+EOF
+
+cat > "$seed_dir/network-config" <<'EOF'
+version: 2
+ethernets:
+  qemu-en:
+    match:
+      name: "en*"
+    dhcp4: true
+  qemu-eth:
+    match:
+      name: "eth*"
+    dhcp4: true
+EOF
+
+cat > "$seed_dir/user-data" <<'EOF'
+#cloud-config
+hostname: ailang-linux-qemu
+manage_etc_hosts: true
+ssh_pwauth: true
+disable_root: false
+users:
+  - default
+  - name: ailang
+    gecos: AiLang QEMU Developer
+    groups: [adm, sudo, audio, video]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    ssh_authorized_keys:
+      - __AILANG_QEMU_SSH_PUB__
+chpasswd:
+  expire: false
+  users:
+    - name: ailang
+      password: ailang
+      type: text
+package_update: true
+packages:
+  - ca-certificates
+  - openssh-server
+  - xorg
+  - xinit
+  - openbox
+  - dbus-x11
+  - x11-xserver-utils
+  - x11-utils
+  - xterm
+write_files:
+  - path: /etc/systemd/system/ailang-x11.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=AiLang target-linux QEMU X11 session
+      After=network-online.target systemd-user-sessions.service
+      Wants=network-online.target
+
+      [Service]
+      User=ailang
+      Environment=HOME=/home/ailang
+      Environment=DISPLAY=:0
+      WorkingDirectory=/home/ailang
+      StandardInput=tty
+      TTYPath=/dev/tty1
+      TTYReset=yes
+      TTYVHangup=yes
+      ExecStart=/usr/bin/xinit /usr/bin/openbox-session -- /usr/bin/Xorg :0 vt1 -nolisten tcp -noreset
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - systemctl enable --now ssh
+  - systemctl enable --now ailang-x11.service
+EOF
+
+tmp_user_data="$seed_dir/user-data.tmp"
+sed "s|__AILANG_QEMU_SSH_PUB__|$ssh_pub|" "$seed_dir/user-data" > "$tmp_user_data"
+mv "$tmp_user_data" "$seed_dir/user-data"
+
+if command -v hdiutil >/dev/null 2>&1; then
+  rm -f "$seed_iso"
+  hdiutil makehybrid -quiet -iso -joliet -default-volume-name cidata -o "$seed_iso" "$seed_dir"
+elif command -v genisoimage >/dev/null 2>&1; then
+  genisoimage -quiet -output "$seed_iso" -volid cidata -joliet -rock "$seed_dir"
+elif command -v mkisofs >/dev/null 2>&1; then
+  mkisofs -quiet -output "$seed_iso" -volid cidata -joliet -rock "$seed_dir"
+else
+  echo 'Err#err1(code=TARGET001 message="hdiutil, genisoimage, or mkisofs is required to create the cloud-init seed image." nodeId=target-linux)' >&2
+  exit 2
+fi
+
+cat > "$manifest" <<EOF
+schema = "ailang.target-linux.qemu.v1"
+arch = "$arch"
+baseUrl = "$base_url"
+image = "$guest_img"
+seed = "$seed_iso"
+sshKey = "$ssh_key"
+user = "ailang"
+display = ":0"
+EOF
+
+echo "target-linux prepare-qemu: image=$guest_img" >&2
+echo "target-linux prepare-qemu: seed=$seed_iso" >&2
+echo "qemu-image=$guest_img"
+echo "qemu-seed=$seed_iso"
+echo "qemu-ssh-key=$ssh_key"

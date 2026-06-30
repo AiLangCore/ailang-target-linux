@@ -1,6 +1,6 @@
 schema = "ailang.package-source.v1"
 name = "target-linux"
-version = "0.0.1-alpha.4"
+version = "0.0.1-alpha.5"
 types = ["target", "tool", "template"]
 
 [targets.linux]
@@ -11,7 +11,7 @@ profile = "linux-posix"
 aliases = ["gnu-linux"]
 defaultRunner = "run"
 artifactTypes = ["dir", "tar.gz", "appimage", "deb", "rpm"]
-options = ["arch", "desktop", "service", "package-format", "runner", "qemu-image", "qemu-efi-code", "qemu-efi-vars", "qemu-efi-vars-template", "qemu-user", "qemu-ssh-port", "qemu-ssh-key", "qemu-display", "qemu-memory", "qemu-smp", "qemu-accel", "qemu-cpu", "qemu-guest-display"]
+options = ["arch", "desktop", "service", "package-format", "runner", "qemu-image", "qemu-seed", "qemu-efi-code", "qemu-efi-vars", "qemu-efi-vars-template", "qemu-user", "qemu-ssh-port", "qemu-ssh-key", "qemu-display", "qemu-memory", "qemu-smp", "qemu-accel", "qemu-cpu", "qemu-guest-display", "qemu-serial-log"]
 
 [targets.linux.tools]
 run = []

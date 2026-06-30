@@ -5,7 +5,7 @@ Official AiLang target package for Linux.
 This target is for normal Linux desktop/server environments. AiOS shell-less
 images live in `ailang-target-aios`.
 
-Current package release: `0.0.1-alpha.4`.
+Current package release: `0.0.1-alpha.5`.
 
 ## Package
 
@@ -46,6 +46,7 @@ service
 package-format
 runner
 qemu-image
+qemu-seed
 qemu-efi-code
 qemu-efi-vars
 qemu-efi-vars-template
@@ -58,6 +59,7 @@ qemu-smp
 qemu-accel
 qemu-cpu
 qemu-guest-display
+qemu-serial-log
 ```
 
 ## Usage
@@ -74,13 +76,35 @@ this repository.
 
 ## QEMU Runner
 
-On Apple Silicon, use an ARM64 Linux guest for local Linux/X11 validation. The
-runner publishes a Linux ARM64 build, starts a prepared QEMU guest when needed,
-copies the output into the guest over SSH, and launches it with `DISPLAY=:0`.
+On Apple Silicon, the runner uses an ARM64 Linux guest for local Linux/X11
+validation. The runner publishes a Linux ARM64 build, starts a QEMU guest when
+needed, copies the output into the guest over SSH, and launches it with
+`DISPLAY=:0`.
 
-The guest image must already contain a working Linux desktop session, SSH
-server, and the target user. The target package does not bundle a Linux
-distribution.
+If no guest image is configured, the target prepares a cached Ubuntu ARM64 cloud
+image with SSH and a lightweight X11/Openbox session. The generated development
+guest uses the local user `ailang` with passwordless sudo and SSH forwarding on
+the configured host port.
+
+```bash
+ailang run . \
+  --target linux \
+  --target-option runner=qemu \
+  --target-option arch=aarch64
+```
+
+The runner defaults to QEMU ARM64 with `virt`, `hvf`, `host` CPU, `cocoa`
+display, `virtio-gpu-pci`, USB keyboard/tablet, and user networking with SSH
+forwarded to the configured port. Boot diagnostics are captured in
+`.ailang/qemu-linux/serial.log` by default.
+
+To prepare the guest without running an app:
+
+```bash
+packages/target-linux/tools/prepare-qemu --arch aarch64
+```
+
+Override the generated guest image when needed:
 
 ```bash
 ailang run . \
@@ -91,7 +115,3 @@ ailang run . \
   --target-option qemu-user=ailang \
   --target-option qemu-ssh-port=2222
 ```
-
-The runner defaults to QEMU ARM64 with `virt`, `hvf`, `host` CPU, `cocoa`
-display, `virtio-gpu-pci`, USB keyboard/tablet, and user networking with SSH
-forwarded to the configured port.
