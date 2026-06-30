@@ -1,4 +1,51 @@
 #!/bin/sh
 set -eu
-echo 'Err#err1(code=TARGET001 message="target-linux run is not implemented yet." nodeId=target-linux)' >&2
-exit 2
+
+program="${2:-.}"
+arch=""
+app_args=""
+after_dash=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --) after_dash=1; shift; continue ;;
+  esac
+  if [ "$after_dash" -eq 1 ]; then
+    app_args="${app_args}${app_args:+
+}$1"
+    shift
+    continue
+  fi
+  case "$1" in
+    --target-option)
+      value="${2:-}"
+      case "$value" in arch=*) arch="${value#arch=}" ;; esac
+      shift 2
+      ;;
+    --target-option=arch=*)
+      arch="${1#--target-option=arch=}"
+      shift
+      ;;
+    *) shift ;;
+  esac
+done
+
+case "${arch:-$(uname -m)}" in
+  arm64|aarch64) rid="linux-arm64" ;;
+  x64|x86_64|amd64) rid="linux-x64" ;;
+  *) echo 'Err#err1(code=TARGET001 message="Unsupported Linux target arch." nodeId=target-linux)' >&2; exit 2 ;;
+esac
+
+if [ "$(uname -s)" != "Linux" ]; then
+  echo 'Err#err1(code=TARGET001 message="target-linux run requires a Linux host; use publish for cross-target output." nodeId=target-linux)' >&2
+  exit 2
+fi
+
+AILANG_BIN="${AILANG_BIN:-ailang}"
+export AILANG_DISABLE_PACKAGE_TARGET_DISPATCH=1
+export AILANG_DISABLE_RUN_TOOL_DISPATCH=1
+if [ -n "$app_args" ]; then
+  # shellcheck disable=SC2086
+  exec "$AILANG_BIN" run "$program" --target "$rid" -- $app_args
+fi
+exec "$AILANG_BIN" run "$program" --target "$rid"

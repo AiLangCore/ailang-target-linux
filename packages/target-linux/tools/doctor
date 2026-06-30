@@ -1,4 +1,8 @@
 #!/bin/sh
 set -eu
-echo 'target-linux doctor: scaffold installed'
+if ! command -v "${AILANG_BIN:-ailang}" >/dev/null 2>&1; then
+  echo 'Err#err1(code=TARGET001 message="ailang executable not found." nodeId=target-linux)' >&2
+  exit 2
+fi
+echo 'target-linux doctor: ok'
 exit 0
