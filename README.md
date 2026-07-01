@@ -5,7 +5,7 @@ Official AiLang target package for Linux.
 This target is for normal Linux desktop/server environments. AiOS shell-less
 images live in `ailang-target-aios`.
 
-Current package release: `0.0.1-alpha.9`.
+Current package release: `0.0.1-alpha.10`.
 
 ## Package
 
@@ -45,6 +45,7 @@ desktop
 service
 package-format
 runner
+display-backend
 qemu-image
 qemu-seed
 qemu-efi-code
@@ -76,10 +77,19 @@ this repository.
 
 ## QEMU Runner
 
-On Apple Silicon, the runner uses an ARM64 Linux guest for local Linux/X11
+On Apple Silicon, the runner uses an ARM64 Linux guest for local Linux
 validation. The runner publishes a Linux ARM64 build, starts a QEMU guest when
-needed, copies the output into the guest over SSH, and launches it with
-`DISPLAY=:0`.
+needed, copies the output into the guest over SSH, and launches it.
+
+Normal Linux executables run under the guest X11/Openbox session with
+`DISPLAY=:0`. AiVectra projects select the display backend independently:
+
+- `display-backend=auto` uses `aivectra-x11` when the SDK provides it, otherwise
+  falls back to the Linux framebuffer runtime.
+- `display-backend=x11` requires an SDK `runtimes/linux-arm64/aivectra-x11`
+  executable and fails clearly if only a framebuffer runtime is installed.
+- `display-backend=framebuffer` stops the guest X11 service and runs the
+  framebuffer runtime directly on the QEMU display.
 
 If no guest image is configured, the target prepares a cached Ubuntu ARM64 cloud
 image with SSH and a lightweight X11/Openbox session. The generated development

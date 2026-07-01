@@ -24,10 +24,12 @@ qemu_cpu="${AILANG_LINUX_QEMU_CPU:-host}"
 qemu_serial_log="${AILANG_LINUX_QEMU_SERIAL_LOG:-}"
 qemu_extra_args=""
 guest_display="${AILANG_LINUX_QEMU_GUEST_DISPLAY:-:0}"
+display_backend="${AILANG_LINUX_DISPLAY_BACKEND:-auto}"
 run_tool=""
 app_aibc1=""
 aivectra_runtime=""
-qemu_cache_schema="ailang.target-linux.qemu.v2"
+aivectra_runtime_kind=""
+qemu_cache_schema="ailang.target-linux.qemu.v3"
 
 host_default_arch() {
   case "$(uname -m 2>/dev/null || true)" in
@@ -59,15 +61,49 @@ project_run_tool() {
   sed -n 's/.*runTool="\([^"]*\)".*/\1/p' "$manifest" | head -n 1
 }
 
-resolve_aivectra_runtime() {
+runtime_is_framebuffer() {
+  candidate="$1"
+  if command -v strings >/dev/null 2>&1 && strings "$candidate" 2>/dev/null | grep -Fq "/dev/fb0"; then
+    return 0
+  fi
+  return 1
+}
+
+resolve_aivectra_x11_runtime() {
   for candidate in \
+    "${AILANG_LINUX_AIVECTRA_X11_BIN:-}" \
+    "${AILANG_SDK_ROOT:-}/runtimes/linux-arm64/aivectra-x11" \
+    "${HOME:-}/.ailang/local/runtimes/linux-arm64/aivectra-x11" \
+    "${HOME:-}/.ailang/current/runtimes/linux-arm64/aivectra-x11" \
+    "${HOME:-}/.ailang/toolchains/0.0.1-beta.22/runtimes/linux-arm64/aivectra-x11" \
     "${AILANG_LINUX_AIVECTRA_BIN:-}" \
     "${AILANG_SDK_ROOT:-}/runtimes/linux-arm64/aivectra" \
     "${HOME:-}/.ailang/local/runtimes/linux-arm64/aivectra" \
     "${HOME:-}/.ailang/current/runtimes/linux-arm64/aivectra" \
     "${HOME:-}/.ailang/toolchains/0.0.1-beta.22/runtimes/linux-arm64/aivectra"
   do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && ! runtime_is_framebuffer "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_aivectra_framebuffer_runtime() {
+  for candidate in \
+    "${AILANG_LINUX_AIVECTRA_FRAMEBUFFER_BIN:-}" \
+    "${AILANG_SDK_ROOT:-}/runtimes/linux-arm64/aivectra-framebuffer" \
+    "${HOME:-}/.ailang/local/runtimes/linux-arm64/aivectra-framebuffer" \
+    "${HOME:-}/.ailang/current/runtimes/linux-arm64/aivectra-framebuffer" \
+    "${HOME:-}/.ailang/toolchains/0.0.1-beta.22/runtimes/linux-arm64/aivectra-framebuffer" \
+    "${AILANG_LINUX_AIVECTRA_BIN:-}" \
+    "${AILANG_SDK_ROOT:-}/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/local/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/current/runtimes/linux-arm64/aivectra" \
+    "${HOME:-}/.ailang/toolchains/0.0.1-beta.22/runtimes/linux-arm64/aivectra"
+  do
+    if [ -n "$candidate" ] && [ -x "$candidate" ] && runtime_is_framebuffer "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -90,6 +126,7 @@ if [ -n \"\$iface\" ] && command -v resolvectl >/dev/null 2>&1; then
 fi
 systemctl disable --now systemd-networkd-wait-online.service 2>/dev/null || true
 systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
+usermod -a -G input,video ailang 2>/dev/null || true
 DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -161,6 +198,7 @@ apply_target_option() {
     qemu-cpu) qemu_cpu="$option_value" ;;
     qemu-guest-display) guest_display="$option_value" ;;
     qemu-serial-log) qemu_serial_log="$option_value" ;;
+    display-backend) display_backend="$option_value" ;;
     *)
       echo "Err#err1(code=TARGET001 message=\"Unsupported Linux target option: $name\" nodeId=target-linux)" >&2
       exit 2
@@ -196,6 +234,10 @@ case "${arch:-$(host_default_arch)}" in
   arm64|aarch64) arch="aarch64"; rid="linux-arm64" ;;
   x64|x86_64|amd64) arch="x86_64"; rid="linux-x64" ;;
   *) echo 'Err#err1(code=TARGET001 message="Unsupported Linux target arch." nodeId=target-linux)' >&2; exit 2 ;;
+esac
+case "$display_backend" in
+  auto|x11|framebuffer) ;;
+  *) echo 'Err#err1(code=TARGET001 message="Unsupported Linux display backend. Expected auto, x11, or framebuffer." nodeId=target-linux)' >&2; exit 2 ;;
 esac
 
 AILANG_BIN="${AILANG_BIN:-ailang}"
@@ -299,11 +341,34 @@ if [ "$run_tool" = "aivectra" ]; then
     echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra build did not produce app.aibc1." nodeId=target-linux)' >&2
     exit 2
   fi
-  aivectra_runtime="$(resolve_aivectra_runtime || true)"
+  case "$display_backend" in
+    x11)
+      aivectra_runtime="$(resolve_aivectra_x11_runtime || true)"
+      aivectra_runtime_kind="x11"
+      ;;
+    framebuffer)
+      aivectra_runtime="$(resolve_aivectra_framebuffer_runtime || true)"
+      aivectra_runtime_kind="framebuffer"
+      ;;
+    auto)
+      aivectra_runtime="$(resolve_aivectra_x11_runtime || true)"
+      if [ -n "$aivectra_runtime" ]; then
+        aivectra_runtime_kind="x11"
+      else
+        aivectra_runtime="$(resolve_aivectra_framebuffer_runtime || true)"
+        aivectra_runtime_kind="framebuffer"
+      fi
+      ;;
+  esac
   if [ -z "$aivectra_runtime" ]; then
-    echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra run requires a Linux ARM64 aivectra runtime in the SDK." nodeId=target-linux)' >&2
+    if [ "$display_backend" = "x11" ]; then
+      echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra X11 run requires a Linux ARM64 aivectra-x11 runtime in the SDK. The installed runtime appears to be framebuffer-only or missing." nodeId=target-linux)' >&2
+    else
+      echo 'Err#err1(code=TARGET001 message="target-linux QEMU AiVectra run requires a Linux ARM64 aivectra runtime in the SDK." nodeId=target-linux)' >&2
+    fi
     exit 2
   fi
+  echo "target-linux qemu: selected AiVectra backend $aivectra_runtime_kind" >&2
   app_name="aivectra"
 else
   "$AILANG_BIN" publish "$program" --target "$rid" --out "$out" >/dev/null
@@ -419,39 +484,41 @@ if [ "$ready" != "1" ]; then
   exit 2
 fi
 
-x_ready=0
-waited=0
-echo "target-linux qemu: waiting for X11 on DISPLAY=$guest_display" >&2
-for _ in $(seq 1 60); do
-  if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
-    x_ready=1
-    break
-  fi
-  waited=$((waited + 1))
-  if [ $((waited % 15)) -eq 0 ]; then
-    echo "target-linux qemu: still waiting for X11 (${waited}s)" >&2
-  fi
-  sleep 1
-done
-if [ "$x_ready" != "1" ]; then
-  echo "target-linux qemu: X11 is not ready; repairing guest display packages" >&2
-  repair_qemu_guest_display
+if [ "$run_tool" != "aivectra" ] || [ "$aivectra_runtime_kind" = "x11" ]; then
+  x_ready=0
   waited=0
-  for _ in $(seq 1 180); do
+  echo "target-linux qemu: waiting for X11 on DISPLAY=$guest_display" >&2
+  for _ in $(seq 1 60); do
     if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
       x_ready=1
       break
     fi
     waited=$((waited + 1))
     if [ $((waited % 15)) -eq 0 ]; then
-      echo "target-linux qemu: still waiting for repaired X11 (${waited}s)" >&2
+      echo "target-linux qemu: still waiting for X11 (${waited}s)" >&2
     fi
     sleep 1
   done
-fi
-if [ "$x_ready" != "1" ]; then
-  echo 'Err#err1(code=TARGET001 message="target-linux QEMU guest became reachable, but X11 did not become ready on DISPLAY=:0." nodeId=target-linux)' >&2
-  exit 2
+  if [ "$x_ready" != "1" ]; then
+    echo "target-linux qemu: X11 is not ready; repairing guest display packages" >&2
+    repair_qemu_guest_display
+    waited=0
+    for _ in $(seq 1 180); do
+      if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
+        x_ready=1
+        break
+      fi
+      waited=$((waited + 1))
+      if [ $((waited % 15)) -eq 0 ]; then
+        echo "target-linux qemu: still waiting for repaired X11 (${waited}s)" >&2
+      fi
+      sleep 1
+    done
+  fi
+  if [ "$x_ready" != "1" ]; then
+    echo 'Err#err1(code=TARGET001 message="target-linux QEMU guest became reachable, but X11 did not become ready on DISPLAY=:0." nodeId=target-linux)' >&2
+    exit 2
+  fi
 fi
 
 remote_dir="/tmp/ailang-target-linux-$app_name"
@@ -459,7 +526,11 @@ ssh $ssh_opts "$qemu_user@127.0.0.1" "rm -rf '$remote_dir' && mkdir -p '$remote_
 if [ "$run_tool" = "aivectra" ]; then
   scp $scp_opts "$app_aibc1" "$qemu_user@127.0.0.1:$remote_dir/app.aibc1" >/dev/null
   scp $scp_opts "$aivectra_runtime" "$qemu_user@127.0.0.1:$remote_dir/aivectra" >/dev/null
-  ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/aivectra' && DISPLAY='$guest_display' '$remote_dir/aivectra' '$remote_dir/app.aibc1'"
+  if [ "$aivectra_runtime_kind" = "framebuffer" ]; then
+    ssh $ssh_opts "$qemu_user@127.0.0.1" "sudo systemctl stop ailang-x11.service 2>/dev/null || true; sudo chvt 1 2>/dev/null || true; chmod +x '$remote_dir/aivectra' && '$remote_dir/aivectra' '$remote_dir/app.aibc1'"
+  else
+    ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/aivectra' && DISPLAY='$guest_display' '$remote_dir/aivectra' '$remote_dir/app.aibc1'"
+  fi
 else
   scp $scp_opts -r "$out/." "$qemu_user@127.0.0.1:$remote_dir/" >/dev/null
   ssh $ssh_opts "$qemu_user@127.0.0.1" "chmod +x '$remote_dir/$app_name' && DISPLAY='$guest_display' '$remote_dir/$app_name'"

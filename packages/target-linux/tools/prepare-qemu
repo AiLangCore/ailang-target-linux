@@ -7,7 +7,7 @@ image_size="${AILANG_LINUX_QEMU_IMAGE_SIZE:-40G}"
 base_url="${AILANG_LINUX_QEMU_BASE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img}"
 base_sha256="${AILANG_LINUX_QEMU_BASE_SHA256:-}"
 force=0
-cache_schema="ailang.target-linux.qemu.v2"
+cache_schema="ailang.target-linux.qemu.v3"
 
 host_default_arch() {
   case "$(uname -m 2>/dev/null || true)" in
@@ -168,7 +168,7 @@ users:
   - default
   - name: ailang
     gecos: AiLang QEMU Developer
-    groups: [adm, sudo, audio, video]
+    groups: [adm, sudo, audio, video, input]
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
