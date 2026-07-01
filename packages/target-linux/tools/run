@@ -167,6 +167,10 @@ systemctl restart ailang-x11.service
 EOS"
 }
 
+guest_x11_ready() {
+  ssh $ssh_opts "$qemu_user@127.0.0.1" "DISPLAY='$guest_display' xdpyinfo >/dev/null 2>&1" >/dev/null 2>&1
+}
+
 append_app_arg() {
   app_args="${app_args}${app_args:+
 }$1"
@@ -489,7 +493,7 @@ if [ "$run_tool" != "aivectra" ] || [ "$aivectra_runtime_kind" = "x11" ]; then
   waited=0
   echo "target-linux qemu: waiting for X11 on DISPLAY=$guest_display" >&2
   for _ in $(seq 1 60); do
-    if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
+    if guest_x11_ready; then
       x_ready=1
       break
     fi
@@ -504,7 +508,7 @@ if [ "$run_tool" != "aivectra" ] || [ "$aivectra_runtime_kind" = "x11" ]; then
     repair_qemu_guest_display
     waited=0
     for _ in $(seq 1 180); do
-      if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
+      if guest_x11_ready; then
         x_ready=1
         break
       fi

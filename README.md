@@ -5,7 +5,7 @@ Official AiLang target package for Linux.
 This target is for normal Linux desktop/server environments. AiOS shell-less
 images live in `ailang-target-aios`.
 
-Current package release: `0.0.1-alpha.10`.
+Current package release: `0.0.1-alpha.11`.
 
 ## Package
 
