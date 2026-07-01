@@ -87,6 +87,8 @@ iface=\$(ip route | awk '/default/ {print \$5; exit}')
 if [ -n \"\$iface\" ] && command -v resolvectl >/dev/null 2>&1; then
   resolvectl dns \"\$iface\" 10.0.2.3 1.1.1.1 8.8.8.8 2>/dev/null || true
 fi
+systemctl disable --now systemd-networkd-wait-online.service 2>/dev/null || true
+systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
 DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -102,8 +104,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 cat > /etc/systemd/system/ailang-x11.service <<'EOF'
 [Unit]
 Description=AiLang target-linux QEMU X11 session
-After=network-online.target systemd-user-sessions.service
-Wants=network-online.target
+After=systemd-user-sessions.service
 
 [Service]
 User=ailang
@@ -393,10 +394,16 @@ if ! ssh $ssh_opts "$qemu_user@127.0.0.1" true >/dev/null 2>&1; then
 fi
 
 ready=0
+waited=0
+echo "target-linux qemu: waiting for SSH on 127.0.0.1:$qemu_ssh_port" >&2
 for _ in $(seq 1 600); do
   if ssh $ssh_opts "$qemu_user@127.0.0.1" true >/dev/null 2>&1; then
     ready=1
     break
+  fi
+  waited=$((waited + 1))
+  if [ $((waited % 15)) -eq 0 ]; then
+    echo "target-linux qemu: still waiting for SSH (${waited}s); serial log: $qemu_serial_log" >&2
   fi
   sleep 1
 done
@@ -406,20 +413,31 @@ if [ "$ready" != "1" ]; then
 fi
 
 x_ready=0
+waited=0
+echo "target-linux qemu: waiting for X11 on DISPLAY=$guest_display" >&2
 for _ in $(seq 1 60); do
   if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
     x_ready=1
     break
+  fi
+  waited=$((waited + 1))
+  if [ $((waited % 15)) -eq 0 ]; then
+    echo "target-linux qemu: still waiting for X11 (${waited}s)" >&2
   fi
   sleep 1
 done
 if [ "$x_ready" != "1" ]; then
   echo "target-linux qemu: X11 is not ready; repairing guest display packages" >&2
   repair_qemu_guest_display
+  waited=0
   for _ in $(seq 1 180); do
     if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
       x_ready=1
       break
+    fi
+    waited=$((waited + 1))
+    if [ $((waited % 15)) -eq 0 ]; then
+      echo "target-linux qemu: still waiting for repaired X11 (${waited}s)" >&2
     fi
     sleep 1
   done

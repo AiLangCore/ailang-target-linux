@@ -197,8 +197,7 @@ write_files:
     content: |
       [Unit]
       Description=AiLang target-linux QEMU X11 session
-      After=network-online.target systemd-user-sessions.service
-      Wants=network-online.target
+      After=systemd-user-sessions.service
 
       [Service]
       User=ailang
@@ -219,6 +218,8 @@ runcmd:
   - mkdir -p /etc/systemd/resolved.conf.d
   - printf '[Resolve]\nDNS=10.0.2.3 1.1.1.1 8.8.8.8\nFallbackDNS=1.1.1.1 8.8.8.8\n' > /etc/systemd/resolved.conf.d/ailang-qemu.conf
   - systemctl restart systemd-resolved || true
+  - systemctl disable --now systemd-networkd-wait-online.service || true
+  - systemctl mask systemd-networkd-wait-online.service || true
   - systemctl enable --now ssh
   - systemctl enable --now ailang-x11.service
 EOF
