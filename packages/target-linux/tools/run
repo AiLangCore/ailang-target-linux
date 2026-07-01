@@ -74,6 +74,60 @@ resolve_aivectra_runtime() {
   return 1
 }
 
+repair_qemu_guest_display() {
+  ssh $ssh_opts "$qemu_user@127.0.0.1" "sudo sh -eu <<'EOS'
+mkdir -p /etc/systemd/resolved.conf.d
+cat > /etc/systemd/resolved.conf.d/ailang-qemu.conf <<'EOF'
+[Resolve]
+DNS=10.0.2.3 1.1.1.1 8.8.8.8
+FallbackDNS=1.1.1.1 8.8.8.8
+EOF
+systemctl restart systemd-resolved 2>/dev/null || true
+iface=\$(ip route | awk '/default/ {print \$5; exit}')
+if [ -n \"\$iface\" ] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl dns \"\$iface\" 10.0.2.3 1.1.1.1 8.8.8.8 2>/dev/null || true
+fi
+DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  ca-certificates \
+  openssh-server \
+  xserver-xorg-core \
+  xserver-xorg-input-libinput \
+  xinit \
+  openbox \
+  dbus-x11 \
+  x11-xserver-utils \
+  x11-utils \
+  xterm
+cat > /etc/systemd/system/ailang-x11.service <<'EOF'
+[Unit]
+Description=AiLang target-linux QEMU X11 session
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+
+[Service]
+User=ailang
+Environment=HOME=/home/ailang
+Environment=DISPLAY=:0
+WorkingDirectory=/home/ailang
+StandardInput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+ExecStart=/usr/bin/xinit /usr/bin/openbox-session -- /usr/bin/Xorg :0 vt1 -nolisten tcp -noreset
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now ssh
+systemctl enable --now ailang-x11.service
+systemctl restart ailang-x11.service
+EOS"
+}
+
 append_app_arg() {
   app_args="${app_args}${app_args:+
 }$1"
@@ -352,13 +406,24 @@ if [ "$ready" != "1" ]; then
 fi
 
 x_ready=0
-for _ in $(seq 1 300); do
+for _ in $(seq 1 60); do
   if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
     x_ready=1
     break
   fi
   sleep 1
 done
+if [ "$x_ready" != "1" ]; then
+  echo "target-linux qemu: X11 is not ready; repairing guest display packages" >&2
+  repair_qemu_guest_display
+  for _ in $(seq 1 180); do
+    if ssh $ssh_opts "$qemu_user@127.0.0.1" "test -S /tmp/.X11-unix/X0" >/dev/null 2>&1; then
+      x_ready=1
+      break
+    fi
+    sleep 1
+  done
+fi
 if [ "$x_ready" != "1" ]; then
   echo 'Err#err1(code=TARGET001 message="target-linux QEMU guest became reachable, but X11 did not become ready on DISPLAY=:0." nodeId=target-linux)' >&2
   exit 2

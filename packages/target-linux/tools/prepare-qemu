@@ -143,10 +143,18 @@ ethernets:
     match:
       name: "en*"
     dhcp4: true
+    dhcp4-overrides:
+      use-dns: false
+    nameservers:
+      addresses: [10.0.2.3, 1.1.1.1, 8.8.8.8]
   qemu-eth:
     match:
       name: "eth*"
     dhcp4: true
+    dhcp4-overrides:
+      use-dns: false
+    nameservers:
+      addresses: [10.0.2.3, 1.1.1.1, 8.8.8.8]
 EOF
 
 cat > "$seed_dir/user-data" <<'EOF'
@@ -175,7 +183,8 @@ package_update: true
 packages:
   - ca-certificates
   - openssh-server
-  - xorg
+  - xserver-xorg-core
+  - xserver-xorg-input-libinput
   - xinit
   - openbox
   - dbus-x11
@@ -207,6 +216,9 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 runcmd:
+  - mkdir -p /etc/systemd/resolved.conf.d
+  - printf '[Resolve]\nDNS=10.0.2.3 1.1.1.1 8.8.8.8\nFallbackDNS=1.1.1.1 8.8.8.8\n' > /etc/systemd/resolved.conf.d/ailang-qemu.conf
+  - systemctl restart systemd-resolved || true
   - systemctl enable --now ssh
   - systemctl enable --now ailang-x11.service
 EOF
