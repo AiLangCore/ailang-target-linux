@@ -27,6 +27,7 @@ guest_display="${AILANG_LINUX_QEMU_GUEST_DISPLAY:-:0}"
 run_tool=""
 app_aibc1=""
 aivectra_runtime=""
+qemu_cache_schema="ailang.target-linux.qemu.v2"
 
 host_default_arch() {
   case "$(uname -m 2>/dev/null || true)" in
@@ -231,6 +232,12 @@ if [ -z "$qemu_image" ]; then
   qemu_cache_dir="${AILANG_LINUX_QEMU_CACHE_DIR:-${HOME:-.}/.ailang/cache/target-linux/qemu/$arch/ubuntu-noble}"
   qemu_image="$qemu_cache_dir/linux-arm64.qcow2"
   qemu_seed="$qemu_cache_dir/seed.iso"
+  qemu_manifest="$qemu_cache_dir/manifest.toml"
+  if { [ -f "$qemu_manifest" ] && ! grep -q "schema = \"$qemu_cache_schema\"" "$qemu_manifest"; } || { [ ! -f "$qemu_manifest" ] && [ -f "$qemu_image" ]; }; then
+    echo "target-linux qemu: stale guest cache detected; rebuilding mutable guest image" >&2
+    rm -f "$qemu_image" "$qemu_seed" "$qemu_manifest"
+    rm -rf "$qemu_cache_dir/seed"
+  fi
   if [ ! -f "$qemu_image" ] || [ ! -f "$qemu_seed" ]; then
     "$tool_dir/prepare-qemu" --arch "$arch" --out "$qemu_cache_dir" >/dev/null
   fi
