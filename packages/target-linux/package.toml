@@ -7,6 +7,7 @@ types = ["target", "tool", "template"]
 id = "linux"
 description = "Linux executable and package target"
 runtime = "aivm"
+hostAbi = 1
 profile = "linux-posix"
 aliases = ["gnu-linux"]
 defaultRunner = "run"

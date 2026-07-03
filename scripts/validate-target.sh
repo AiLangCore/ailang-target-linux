@@ -7,4 +7,5 @@ for tool in run publish doctor flash prepare-qemu; do
   sh -n "${ROOT_DIR}/packages/target-linux/tools/${tool}"
 done
 grep -q 'types = .*"target"' "${ROOT_DIR}/packages/target-linux/package.toml"
+grep -q 'hostAbi = 1' "${ROOT_DIR}/packages/target-linux/package.toml"
 echo "target-linux validation: PASS"

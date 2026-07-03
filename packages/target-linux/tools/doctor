@@ -4,5 +4,13 @@ if ! command -v "${AILANG_BIN:-ailang}" >/dev/null 2>&1; then
   echo 'Err#err1(code=TARGET001 message="ailang executable not found." nodeId=target-linux)' >&2
   exit 2
 fi
+version_output="$("${AILANG_BIN:-ailang}" --version 2>/dev/null || true)"
+case "$version_output" in
+  *"abi=1"*) ;;
+  *)
+    echo 'Err#err1(code=TARGET002 message="target-linux requires AiVM host ABI 1." nodeId=target-linux)' >&2
+    exit 2
+    ;;
+esac
 echo 'target-linux doctor: ok'
 exit 0
